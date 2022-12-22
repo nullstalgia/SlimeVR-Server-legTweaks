@@ -19,6 +19,8 @@ public class LegTweaks {
 	private boolean floorclipEnabled = false;
 	private boolean skatingCorrectionEnabled = false;
 	private boolean active = false;
+	private boolean forceActive = false;
+	private boolean localizerMode = false;
 	private boolean rightLegActive = false;
 	private boolean leftLegActive = false;
 
@@ -206,6 +208,21 @@ public class LegTweaks {
 		return this.enabled;
 	}
 
+	public boolean getForceActive() {
+		return this.forceActive;
+	}
+
+	public void setForceActive(boolean forceActive) {
+		this.forceActive = forceActive;
+	}
+
+	public void setLocalizerMode(boolean localizerMode) {
+		// note: turning off the localizer will require a reset to
+		// properly initialize
+		this.localizerMode = localizerMode;
+		this.initialized = false;
+	}
+
 	public boolean getFloorclipEnabled() {
 		return this.floorclipEnabled;
 	}
@@ -221,6 +238,10 @@ public class LegTweaks {
 	public void setConfig(LegTweaksConfig config) {
 		this.config = config;
 		updateConfig();
+	}
+
+	public LegTweakBuffer getBuffer() {
+		return bufferHead;
 	}
 
 	public void updateConfig() {
@@ -298,9 +319,13 @@ public class LegTweaks {
 		// if not initialized, we need to calculate some values from this frame
 		// to be used later (must happen immediately after reset)
 		if (!initialized) {
-			floorLevel = (leftFootPosition.y + rightFootPosition.y) / 2f + FLOOR_CALIBRATION_OFFSET;
-			waistToFloorDist = waistPosition.y - floorLevel;
-
+			// when not using a 6 dof tracker these values are not relevant and
+			// are set in the localizer
+			if (!localizerMode) {
+				floorLevel = (leftFootPosition.y + rightFootPosition.y) / 2f
+					+ FLOOR_CALIBRATION_OFFSET;
+				waistToFloorDist = waistPosition.y - floorLevel;
+			}
 			// invalidate the buffer since the non initialized output may be
 			// very wrong
 			bufferInvalid = true;
@@ -716,6 +741,13 @@ public class LegTweaks {
 
 	// returns true if it is likely the user is standing
 	public boolean isStanding() {
+		// if force active is on do not check for standing as the system should
+		// always be on
+		if (forceActive || localizerMode) {
+			currentDisengagementOffset = 0f;
+			return true;
+		}
+
 		// if the waist is below the vertical cutoff, user is not standing
 		float cutoff = floorLevel
 			+ waistToFloorDist

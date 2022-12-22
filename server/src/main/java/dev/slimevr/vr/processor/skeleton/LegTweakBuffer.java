@@ -32,9 +32,10 @@ public class LegTweakBuffer {
 	private static final float GRAVITY_MAGNITUDE = GRAVITY.length();
 	private static final int BUFFER_LEN = 10;
 
-	// states for the legs
 	private int leftLegState = STATE_UNKNOWN;
 	private int rightLegState = STATE_UNKNOWN;
+	private float leftLegNumericalState = 0;
+	private float rightLegNumericalState = 0;
 
 	// positions and rotations
 	private Vector3f leftFootPosition = new Vector3f();
@@ -118,6 +119,7 @@ public class LegTweakBuffer {
 	private float leftFootSensitivityAccel = 1.0f;
 	private float rightFootSensitivityAccel = 1.0f;
 
+	// TODO update these values on config change
 	private static final float SKATING_CUTOFF_ENGAGE = SKATING_DISTANCE_CUTOFF
 		* SKATING_LOCK_ENGAGE_PERCENT;
 	private static final float SKATING_VELOCITY_CUTOFF_ENGAGE = SKATING_VELOCITY_THRESHOLD
@@ -284,6 +286,20 @@ public class LegTweakBuffer {
 		this.centerOfMass.set(centerOfMass);
 	}
 
+	public Vector3f getCenterOfMassVelociy(Vector3f vec) {
+		if (vec == null)
+			vec = new Vector3f();
+
+		return vec.set(centerOfMassVelocity);
+	}
+
+	public Vector3f getCenterOfMassAcceleration(Vector3f vec) {
+		if (vec == null)
+			vec = new Vector3f();
+
+		return vec.set(centerOfMassAcceleration);
+	}
+
 	public void setLeftFloorLevel(float leftFloorLevel) {
 		this.leftFloorLevel = leftFloorLevel;
 	}
@@ -306,6 +322,14 @@ public class LegTweakBuffer {
 
 	public void setRightLegState(int rightLegState) {
 		this.rightLegState = rightLegState;
+	}
+
+	public float getLeftLegNumericalState() {
+		return leftLegNumericalState;
+	}
+
+	public float getRightLegNumericalState() {
+		return rightLegNumericalState;
 	}
 
 	public void setParent(LegTweakBuffer parent) {
@@ -336,22 +360,6 @@ public class LegTweakBuffer {
 			vec = new Vector3f();
 
 		return vec.set(rightFootAcceleration);
-	}
-
-	public float getLeftFootAccelerationMagnitude() {
-		return this.leftFootAcceleration.length();
-	}
-
-	public float getRightFootAccelerationMagnitude() {
-		return this.rightFootAcceleration.length();
-	}
-
-	public float getLeftFootAccelerationY() {
-		return this.leftFootAcceleration.y;
-	}
-
-	public float getRightFootAccelerationY() {
-		return this.rightFootAcceleration.y;
 	}
 
 	public float getLeftFloorLevel() {
@@ -419,6 +427,8 @@ public class LegTweakBuffer {
 		// individual frame
 		leftLegState = checkStateLeft();
 		rightLegState = checkStateRight();
+
+		computeNumericalState();
 	}
 
 	// check if a locked foot should stay locked or be released
@@ -489,6 +499,43 @@ public class LegTweakBuffer {
 
 		return LOCKED;
 	}
+
+	// compute the numerical value of the state
+	private void computeNumericalState() {
+		// compute the numerical value of the state.
+		leftLegNumericalState = computeNumericalStateLeft();
+		rightLegNumericalState = computeNumericalStateRight();
+	}
+
+	// returns the average percentage the real velocity and acceleration are of
+	// the the scaled thresholds for velocity and acceleration
+	private float computeNumericalStateLeft() {
+		float timeStep = getTimeDelta();
+		float velocity = leftFootVelocityMagnitude * timeStep;
+		float acceleration = leftFootAccelerationMagnitude;
+
+		float velocityPercentage = velocity / (SKATING_VELOCITY_THRESHOLD * leftFootSensitivityVel);
+		float accelerationPercentage = acceleration
+			/ (SKATING_ACCELERATION_THRESHOLD * leftFootSensitivityAccel);
+
+		return (velocityPercentage + (accelerationPercentage * 2.0f)) / 2.0f;
+	}
+
+	// returns the average percentage the real velocity and acceleration are of
+	// the the scaled thresholds for velocity and acceleration
+	private float computeNumericalStateRight() {
+		float timeStep = getTimeDelta();
+		float velocity = rightFootVelocityMagnitude * timeStep;
+		float acceleration = rightFootAccelerationMagnitude;
+
+		float velocityPercentage = velocity
+			/ (SKATING_VELOCITY_THRESHOLD * rightFootSensitivityVel);
+		float accelerationPercentage = acceleration
+			/ (SKATING_ACCELERATION_THRESHOLD * rightFootSensitivityAccel);
+
+		return (velocityPercentage + (accelerationPercentage * 2.0f)) / 2.0f;
+	}
+
 
 	// get the difference in feet position between the kinematic and corrected
 	// positions of the feet disregarding vertical displacment

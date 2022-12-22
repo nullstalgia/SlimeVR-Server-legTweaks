@@ -146,6 +146,10 @@ public class HumanSkeleton extends Skeleton implements SkeletonConfigCallback {
 	protected ViveEmulation viveEmulation = new ViveEmulation(this);
 	// #endregion
 
+	// #region Localizer
+	protected Localizer localizer = new Localizer(this);
+	// #endregion
+
 	// #region Constructors
 	protected HumanSkeleton(List<? extends ComputedHumanPoseTracker> computedTrackers) {
 		assembleSkeleton(false);
@@ -799,6 +803,7 @@ public class HumanSkeleton extends Skeleton implements SkeletonConfigCallback {
 		updateRootTrackers();
 		updateComputedTrackers();
 		tweakLegPos();
+		localizer.update();
 		viveEmulation.update();
 	}
 	// #endregion
@@ -850,7 +855,7 @@ public class HumanSkeleton extends Skeleton implements SkeletonConfigCallback {
 		// #endregion
 
 		// HMD, head and neck
-		if (hmdTracker != null) {
+		if (hmdTracker != null && !localizer.getEnabled()) {
 			hmdTracker.getPosition(posBuf);
 			hmdNode.localTransform.setTranslation(posBuf);
 
@@ -861,6 +866,8 @@ public class HumanSkeleton extends Skeleton implements SkeletonConfigCallback {
 			if (neckTracker != null)
 				neckTracker.getRotation(rotBuf1);
 			headNode.localTransform.setRotation(rotBuf1);
+		} else if (localizer.getEnabled()) {
+			// do nothing, the localizer will handle moving the head
 		} else {
 			// Set to zero
 			hmdNode.localTransform.setTranslation(Vector3f.ZERO);
@@ -1794,10 +1801,14 @@ public class HumanSkeleton extends Skeleton implements SkeletonConfigCallback {
 			}
 		}
 
-		// tell the clip corrector to reset its floor level on the next update
-		// of the computed trackers
+		// reset legtweaks
 		this.legTweaks.resetFloorLevel();
 		this.legTweaks.resetBuffer();
+
+		// Reset the localizer (must happen after leg tweaks)
+		if (this.localizer.getEnabled()) {
+			this.localizer.reset();
+		}
 	}
 
 	private boolean shouldResetMounting(TrackerPosition position) {
