@@ -65,9 +65,10 @@ public class LegTweaks {
 	 */
 
 	// hyperparameters (clip correction)
+	// TODO make these configurable
 	static float DYNAMIC_DISPLACEMENT_CUTOFF = 1.0f;
 	static float MAX_DYNAMIC_DISPLACEMENT = 0.06f;
-	private static final float FLOOR_CALIBRATION_OFFSET = 0.015f;
+	static final float FLOOR_CALIBRATION_OFFSET = 0.015f;
 
 	// hyperparameters (skating correction)
 	private static final float MIN_ACCEPTABLE_ERROR = 0.01f;
