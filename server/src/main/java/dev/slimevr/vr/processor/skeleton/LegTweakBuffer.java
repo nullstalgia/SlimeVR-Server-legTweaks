@@ -76,6 +76,8 @@ public class LegTweakBuffer {
 	private Vector3f centerOfMass = new Vector3f();
 	private Vector3f centerOfMassVelocity = new Vector3f();
 	private Vector3f centerOfMassAcceleration = new Vector3f();
+	private float leftFootPressure = 0;
+	private float rightFootPressure = 0;
 	private float leftFloorLevel;
 	private float rightFloorLevel;
 
@@ -300,6 +302,14 @@ public class LegTweakBuffer {
 		return vec.set(centerOfMassAcceleration);
 	}
 
+	public float getLeftFootPressure() {
+		return leftFootPressure;
+	}
+
+	public float getRightFootPressure() {
+		return rightFootPressure;
+	}
+
 	public void setLeftFloorLevel(float leftFloorLevel) {
 		this.leftFloorLevel = leftFloorLevel;
 	}
@@ -411,7 +421,7 @@ public class LegTweakBuffer {
 	}
 
 	// update the frame number and discard frames older than BUFFER_LEN
-	public void updateFrameNumber(int frameNumber) {
+	private void updateFrameNumber(int frameNumber) {
 		this.frameNumber = frameNumber;
 
 		if (this.frameNumber >= BUFFER_LEN)
@@ -637,14 +647,16 @@ public class LegTweakBuffer {
 
 		// get the third set of scalars that is based on where the COM is
 		float[] pressureScalars = getPressurePrediction();
+		leftFootPressure = pressureScalars[0];
+		rightFootPressure = pressureScalars[1];
 
 		// combine the scalars to get the final scalars
 		leftFootSensitivityVel = (leftFootScalarAccel
 			+ leftFootScalarVel / 2.0f)
-			* FastMath.clamp(pressureScalars[0] * 2.0f, PRESSURE_SCALER_MIN, PRESSURE_SCALER_MAX);
+			* FastMath.clamp(leftFootPressure * 2.0f, PRESSURE_SCALER_MIN, PRESSURE_SCALER_MAX);
 		rightFootSensitivityVel = (rightFootScalarAccel
 			+ rightFootScalarVel / 2.0f)
-			* FastMath.clamp(pressureScalars[1] * 2.0f, PRESSURE_SCALER_MIN, PRESSURE_SCALER_MAX);
+			* FastMath.clamp(rightFootPressure * 2.0f, PRESSURE_SCALER_MIN, PRESSURE_SCALER_MAX);
 
 		leftFootSensitivityAccel = leftFootScalarVel;
 		rightFootSensitivityAccel = rightFootScalarVel;
