@@ -1,5 +1,6 @@
 package dev.slimevr.vr.processor.skeleton;
 
+import com.jme3.math.Quaternion;
 import com.jme3.math.Vector3f;
 
 import dev.slimevr.vr.trackers.TrackerStatus;
@@ -15,21 +16,31 @@ public class Localizer {
 	public static final int RIGHT_LOCKED = 2;
 	public static final int BOTH_LOCKED = 3;
 	public static final int NONE_LOCKED = 4;
+	public static final int FOLLOW_FOOT = 5;
+	public static final int FOLLOW_COM = 6;
 
 	// hyperparameters
-	private static final float MAX_PERCENTAGE_OVER_THRESHOLD = 3.0f;
+	private static final float MAX_PERCENTAGE_OVER_THRESHOLD = 6.0f;
+	private static final float GROUND_SNAP_PERCENT = 0.1f;
 
 	// classes
 	private HumanSkeleton skeleton;
 	private LegTweaks legTweaks;
+
+	// conviniance variables
+	private float uncorrectedFloor = 0.0f;
 
 	// state
 	private boolean enabled = false;
 	private LegTweakBuffer bufCur;
 	private LegTweakBuffer bufPrev;
 	private Vector3f targetPos = new Vector3f();
-	private int plantedFoot = NONE_LOCKED;
+	private Vector3f targetCOM = new Vector3f();
+	private Vector3f expectedCOMVelocity = new Vector3f();
+	private int plantedFoot = BOTH_LOCKED;
+	private int worldState = FOLLOW_FOOT;
 	private boolean footInit = false;
+	private boolean comInit = false;
 
 	public Localizer(HumanSkeleton skeleton) {
 		this.skeleton = skeleton;
@@ -46,6 +57,7 @@ public class Localizer {
 		// change some state variables in legtweaks when active
 		if (enabled) {
 			legTweaks.setFloorLevel(0.0f);
+			this.uncorrectedFloor = 0.0f - LegTweaks.FLOOR_CALIBRATION_OFFSET;
 		}
 		legTweaks.setLocalizerMode(enabled);
 	}
@@ -62,28 +74,31 @@ public class Localizer {
 		bufCur = legTweaks.getBuffer();
 		bufPrev = bufCur.getParent();
 
+		// get momvent metric to be used for this frame
+		worldState = getMovmentMetric();
+
 		// get the movment of the skeleton by foot travel
 		Vector3f footTravel = getPlantedFootTravel();
 
 		// get the movment of the skeleton by the previus COM velocity
 		Vector3f COMTravel = getCOMTravel();
 
-		// TODO use COM velocity and acceleration to allow for jumping and other
-		// movements where the foot may temporarily be off the ground
-
 		// if neither foot is on the floor level accelerate towards the ground
 		// until one foot is on the ground
-		float yShift = keepOnGround();
+		float correction = getCorrectiveMovment();
 
+		// add the y shift to the foot travel
+		if (footTravel != null)
+			footTravel.y += correction;
 
 		// if the foot is not initialized, use the COM velocity as a guess of
 		// movement for this frame
-		if (!footInit) {
+		if (!footInit || footTravel == null) {
 			footTravel = COMTravel;
-		}
 
-		// add the y shift to the foot travel
-		footTravel.setY(footTravel.y - yShift);
+			// TODO remove this
+			footTravel = new Vector3f(0, 0, 0);
+		}
 
 		// update the skeletons root position
 		updateSkeletonPos(footTravel);
@@ -104,7 +119,7 @@ public class Localizer {
 
 	private int getPlantedFoot() {
 		if (bufPrev == null)
-			return NONE_LOCKED;
+			return BOTH_LOCKED;
 
 		// return the foot planted if a certain state is active
 		if (
@@ -139,6 +154,12 @@ public class Localizer {
 		return NONE_LOCKED;
 	}
 
+	// check if the foot that is planted is actually planted
+	private int getMovmentMetric() {
+		// TODO
+		return FOLLOW_FOOT;
+	}
+
 	// get the foot or feet that are planted
 	// also sets the planted foot, foot init, and target pos variables
 	private Vector3f getPlantedFootTravel() {
@@ -147,6 +168,15 @@ public class Localizer {
 
 		// get the foot that is planted
 		int foot = getPlantedFoot();
+
+		// both feet being locked is treated as the locked foot not changing
+		if (foot == BOTH_LOCKED) {
+			// if neither foot was locked, default to the left
+			// this should be unlikely to happen
+			if (plantedFoot == NONE_LOCKED)
+				plantedFoot = LEFT_LOCKED;
+			foot = plantedFoot;
+		}
 
 		if (foot == LEFT_LOCKED) {
 			Vector3f footLoc = bufCur.getLeftFootPosition(null);
@@ -159,13 +189,7 @@ public class Localizer {
 			return getFootTravel(
 				footLoc
 			);
-		} else if (foot == BOTH_LOCKED) {
-			// if both feet are planted, average the travel to minimize error
-			Vector3f footloc = getAverageFootTravel();
-			updateTargetPos(footloc, foot);
-			return getFootTravel(footloc);
 		}
-
 
 		return new Vector3f();
 	}
@@ -173,19 +197,6 @@ public class Localizer {
 	// get the travel of a foot over a frame
 	private Vector3f getFootTravel(Vector3f loc) {
 		return loc.subtract(targetPos);
-	}
-
-	// get the average foot travel of the two feet
-	private Vector3f getAverageFootTravel() {
-		return getFootTravel(
-			bufCur.getLeftFootPosition(null)
-		)
-			.addLocal(
-				getFootTravel(
-					bufCur.getRightFootPosition(null)
-				)
-			)
-			.divideLocal(2.0f);
 	}
 
 	// update the target position of the foot
@@ -199,34 +210,60 @@ public class Localizer {
 		}
 	}
 
-	// when neither foot is planted, guess the travel
+	// when neither foot is planted, guess the travel of the COM from its last
+	// positions
 	private Vector3f getCOMTravel() {
-		// for now return the velocity of the center of mass
-		// TODO implement a better guess
-		return bufCur
-			.getCenterOfMassVelociy(null)
-			.divide(legTweaks.getBuffer().getTimeDelta());
 
+		// update COM attributes
+		updateTargetCOM();
+
+		// return the distance needed to move the COM to the target COM
+		Vector3f dist = bufCur.getCenterOfMass(null).subtract(targetCOM);
+
+		// prevent overshoots
+		if (bufCur.getLeftFootPosition(null).y - dist.y < uncorrectedFloor)
+			dist.y = bufCur.getLeftFootPosition(null).y - uncorrectedFloor;
+		if (bufCur.getRightFootPosition(null).y - dist.y < uncorrectedFloor)
+			dist.y = bufCur.getRightFootPosition(null).y - uncorrectedFloor;
+
+		return dist;
 	}
 
-	// makes sure the skeleton stays on the ground unless a jump is detected
-	// TODO use actual physics
-	private float keepOnGround() {
-		if (
-			bufCur.getLeftFootPosition(null).y > bufCur.getLeftFloorLevel()
-				&& bufCur.getRightFootPosition(null).y > bufCur.getRightFloorLevel()
-		)
-			return -0.01f;
-		if (
-			bufCur.getLeftFootPosition(null).y < bufCur.getLeftFloorLevel()
-				|| bufCur.getRightFootPosition(null).y < bufCur.getRightFloorLevel()
-		)
-			return 0.01f;
-		return 0.00f;
+	// update the COM target position
+	private void updateTargetCOM() {
+		// TODO
 	}
 
-	// update the hmd position
+	// makes sure the skeleton stays on the ground and doesn't fall through it
+	private float getCorrectiveMovment() {
+		// first get the distance to the ground and the current COM velocity
+		float distToGround;
+		if (plantedFoot == LEFT_LOCKED) {
+			distToGround = bufCur.getLeftFootPosition(null).y - uncorrectedFloor;
+		} else if (plantedFoot == RIGHT_LOCKED) {
+			distToGround = bufCur.getRightFootPosition(null).y - uncorrectedFloor;
+		} else {
+			// if no foot is planted return the average of the two feet
+			distToGround = (bufCur.getLeftFootPosition(null).y
+				- uncorrectedFloor
+				+ bufCur.getRightFootPosition(null).y
+				- uncorrectedFloor) / 2.0f;
+		}
+
+		// if the foot is below the ground, return the distance to the ground
+		// to imidiatly correct
+		if (distToGround < 0.0f)
+			return distToGround;
+
+		// if the foot is above the ground, return GROUND_SNAP_PERCENT of the
+		// distance to the ground to correct
+		return distToGround * GROUND_SNAP_PERCENT;
+	}
+
+	// update the hmd position and rotation
 	private void updateSkeletonPos(Vector3f travel) {
+		Quaternion rot = new Quaternion();
+		skeleton.hmdTracker.getRotation(rot);
 		skeleton.hmdNode.localTransform.getTranslation().subtractLocal(travel);
 	}
 
