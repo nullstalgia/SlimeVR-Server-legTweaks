@@ -267,6 +267,105 @@ public class LegTweaks {
 			+ (newStrength * MAX_CORRECTION_STRENGTH_DELTA);
 	}
 
+	// tweak the position of the legs based on data from the last frames
+	public void tweakLegs() {
+		// update the class with the latest data from the skeleton
+		// if false is returned something indicated that the legs should not be
+		// tweaked
+		if (!preUpdate())
+			return;
+
+		// push the feet up if needed
+		if (floorclipEnabled)
+			correctClipping();
+
+		// correct for skating if needed
+		if (skatingCorrectionEnabled)
+			correctSkating();
+
+		// determine if either leg is in a position to activate or deactivate
+		// (use the buffer to get the positions before corrections)
+		float leftFootDif = bufferHead
+			.getLeftFootPosition(null)
+			.subtract(leftFootPosition)
+			.setX(0)
+			.setZ(0)
+			.length();
+
+		float rightFootDif = bufferHead
+			.getRightFootPosition(null)
+			.subtract(rightFootPosition)
+			.setX(0)
+			.setZ(0)
+			.length();
+
+		if (!active && leftFootDif < NEARLY_ZERO) {
+			leftLegActive = false;
+		} else if (active && leftFootDif < NEARLY_ZERO) {
+			leftLegActive = true;
+		}
+
+		if (!active && rightFootDif < NEARLY_ZERO) {
+			rightLegActive = false;
+		} else if (active && rightFootDif < NEARLY_ZERO) {
+			rightLegActive = true;
+		}
+
+		// restore the y positions of inactive legs
+		if (!leftLegActive) {
+			leftFootPosition.y = bufferHead.getLeftFootPosition(null).y;
+			leftKneePosition.y = bufferHead.getLeftKneePosition(null).y;
+		}
+
+		if (!rightLegActive) {
+			rightFootPosition.y = bufferHead.getRightFootPosition(null).y;
+			rightKneePosition.y = bufferHead.getRightKneePosition(null).y;
+		}
+
+		// calculate the correction for the knees
+		if (kneesActive && initialized)
+			solveLowerBody();
+
+		// populate the corrected data into the current frame
+		this.bufferHead.setLeftFootPositionCorrected(leftFootPosition);
+		this.bufferHead.setRightFootPositionCorrected(rightFootPosition);
+		this.bufferHead.setLeftKneePositionCorrected(leftKneePosition);
+		this.bufferHead.setRightKneePositionCorrected(rightKneePosition);
+		this.bufferHead.setWaistPositionCorrected(waistPosition);
+	}
+
+	// returns true if the foot is clipped and false if it is not
+	public boolean isClipped(float leftOffset, float rightOffset) {
+		return (leftFootPosition.y < floorLevel + leftOffset
+			|| rightFootPosition.y < floorLevel + rightOffset);
+	}
+
+	// returns true if it is likely the user is standing
+	public boolean isStanding() {
+		// if force active is on do not check for standing as the system should
+		// always be on
+		if (forceActive || localizerMode) {
+			currentDisengagementOffset = 0f;
+			return true;
+		}
+
+		// if the waist is below the vertical cutoff, user is not standing
+		float cutoff = floorLevel
+			+ waistToFloorDist
+			- (waistToFloorDist * STANDING_CUTOFF_VERTICAL);
+
+		if (waistPosition.y < cutoff) {
+			currentDisengagementOffset = (1 - waistPosition.y / cutoff)
+				* MAX_DISENGAGMENT_OFFSET;
+
+			return false;
+		}
+
+		currentDisengagementOffset = 0f;
+
+		return true;
+	}
+
 	// set the vectors in this object to the vectors in the skeleton
 	private void setVectors() {
 		// set the positions of the feet and knees to the skeletons current
@@ -343,65 +442,11 @@ public class LegTweaks {
 
 		// if the buffer is invalid add all the extra info
 		if (bufferInvalid) {
-			bufferHead.setLeftFootPositionCorrected(leftFootPosition);
-			bufferHead.setRightFootPositionCorrected(rightFootPosition);
-			bufferHead.setLeftKneePositionCorrected(leftKneePosition);
-			bufferHead.setRightKneePositionCorrected(rightKneePosition);
-			bufferHead.setWaistPositionCorrected(waistPosition);
-			bufferHead.setLeftFootPosition(leftFootPosition);
-			bufferHead.setRightFootPosition(rightFootPosition);
-			bufferHead.setLeftKneePosition(leftKneePosition);
-			bufferHead.setRightKneePosition(rightKneePosition);
-			bufferHead.setWaistPosition(waistPosition);
-			bufferHead.setLeftLegState(LegTweakBuffer.UNLOCKED);
-			bufferHead.setRightLegState(LegTweakBuffer.UNLOCKED);
-
-			// if the system is active propulate the buffer with corrected floor
-			// clip feet positions
-			if (active && isStanding()) {
-				correctClipping();
-				bufferHead.setLeftFootPositionCorrected(leftFootPosition);
-				bufferHead.setRightFootPositionCorrected(rightFootPosition);
-			}
-
-			bufferInvalid = false;
+			initBuffer();
 		}
 
 		// update the buffer
-		LegTweakBuffer currentFrame = new LegTweakBuffer();
-		currentFrame.setLeftFootPosition(leftFootPosition);
-		currentFrame.setLeftFootRotation(leftFootRotation);
-		currentFrame.setLeftKneePosition(leftKneePosition);
-		currentFrame.setRightFootPosition(rightFootPosition);
-		currentFrame.setRightFootRotation(rightFootRotation);
-		currentFrame.setRightKneePosition(rightKneePosition);
-		currentFrame.setWaistPosition(waistPosition);
-		currentFrame.setCenterOfMass(computeCenterOfMass());
-
-		currentFrame
-			.setLeftFloorLevel(
-				(floorLevel + (MAX_DYNAMIC_DISPLACEMENT * getLeftFootOffset()))
-					- currentDisengagementOffset
-			);
-
-		currentFrame
-			.setRightFloorLevel(
-				(floorLevel + (MAX_DYNAMIC_DISPLACEMENT * getRightFootOffset()))
-					- currentDisengagementOffset
-			);
-
-		// put the acceleration vector that is applicable to the tracker
-		// quantity in the the buffer
-		// (if feet are not available, fallback to 6 tracker mode)
-		if (skeleton.leftFootTracker != null && skeleton.rightFootTracker != null) {
-			currentFrame.setLeftFootAcceleration(leftFootAcceleration);
-			currentFrame.setRightFootAcceleration(rightFootAcceleration);
-			currentFrame.setDetectionMode(LegTweakBuffer.FOOT_ACCEL);
-		} else if (skeleton.leftLowerLegTracker != null && skeleton.rightLowerLegTracker != null) {
-			currentFrame.setLeftFootAcceleration(leftLowerLegAcceleration);
-			currentFrame.setRightFootAcceleration(rightLowerLegAcceleration);
-			currentFrame.setDetectionMode(LegTweakBuffer.ANKLE_ACCEL);
-		}
+		LegTweakBuffer currentFrame = prepareBuffer();
 
 		// update the buffer head and compute the current state of the legs
 		currentFrame.setParent(bufferHead);
@@ -414,78 +459,78 @@ public class LegTweaks {
 		return true;
 	}
 
-	// tweak the position of the legs based on data from the last frames
-	public void tweakLegs() {
-		// update the class with the latest data from the skeleton
-		// if false is returned something indicated that the legs should not be
-		// tweaked
-		if (!preUpdate())
-			return;
+	// populates the buffer with the current frame data
+	private LegTweakBuffer prepareBuffer() {
+		// create a new frame
+		LegTweakBuffer frame = new LegTweakBuffer();
 
-		// push the feet up if needed
-		if (floorclipEnabled)
+		// set the data for the current frame
+		frame.setLeftFootPosition(leftFootPosition);
+		frame.setLeftFootRotation(leftFootRotation);
+		frame.setLeftKneePosition(leftKneePosition);
+		frame.setRightFootPosition(rightFootPosition);
+		frame.setRightFootRotation(rightFootRotation);
+		frame.setRightKneePosition(rightKneePosition);
+		frame.setWaistPosition(waistPosition);
+		frame.setCenterOfMass(computeCenterOfMass());
+
+		// set the floor levels for the current frame
+		frame
+			.setLeftFloorLevel(
+				(floorLevel + (MAX_DYNAMIC_DISPLACEMENT * getLeftFootOffset()))
+					- currentDisengagementOffset
+			);
+
+		frame
+			.setRightFloorLevel(
+				(floorLevel + (MAX_DYNAMIC_DISPLACEMENT * getRightFootOffset()))
+					- currentDisengagementOffset
+			);
+
+		// put the acceleration vector that is applicable to the tracker
+		// quantity in the the buffer
+		// (if feet are not available, fallback to 6 tracker mode)
+		if (skeleton.leftFootTracker != null && skeleton.rightFootTracker != null) {
+			frame.setLeftFootAcceleration(leftFootAcceleration);
+			frame.setRightFootAcceleration(rightFootAcceleration);
+			frame.setDetectionMode(LegTweakBuffer.FOOT_ACCEL);
+		} else if (skeleton.leftLowerLegTracker != null && skeleton.rightLowerLegTracker != null) {
+			frame.setLeftFootAcceleration(leftLowerLegAcceleration);
+			frame.setRightFootAcceleration(rightLowerLegAcceleration);
+			frame.setDetectionMode(LegTweakBuffer.ANKLE_ACCEL);
+		}
+
+		return frame;
+	}
+
+	// initializes the buffer to prevent bad output
+	private void initBuffer() {
+		// set corrected positions to the current positions
+		bufferHead.setLeftFootPositionCorrected(leftFootPosition);
+		bufferHead.setRightFootPositionCorrected(rightFootPosition);
+		bufferHead.setLeftKneePositionCorrected(leftKneePosition);
+		bufferHead.setRightKneePositionCorrected(rightKneePosition);
+		bufferHead.setWaistPositionCorrected(waistPosition);
+		bufferHead.setLeftFootPosition(leftFootPosition);
+		bufferHead.setRightFootPosition(rightFootPosition);
+		bufferHead.setLeftKneePosition(leftKneePosition);
+		bufferHead.setRightKneePosition(rightKneePosition);
+		bufferHead.setWaistPosition(waistPosition);
+		bufferHead.setLeftLegState(LegTweakBuffer.UNLOCKED);
+		bufferHead.setRightLegState(LegTweakBuffer.UNLOCKED);
+
+		// if the system is active populate the buffer with corrected floor
+		// clip feet positions
+		if (active && isStanding()) {
 			correctClipping();
-
-		// correct for skating if needed
-		if (skatingCorrectionEnabled)
-			correctSkating();
-
-		// determine if either leg is in a position to activate or deactivate
-		// (use the buffer to get the positions before corrections)
-		float leftFootDif = bufferHead
-			.getLeftFootPosition(null)
-			.subtract(leftFootPosition)
-			.setX(0)
-			.setZ(0)
-			.length();
-
-		float rightFootDif = bufferHead
-			.getRightFootPosition(null)
-			.subtract(rightFootPosition)
-			.setX(0)
-			.setZ(0)
-			.length();
-
-		if (!active && leftFootDif < NEARLY_ZERO) {
-			leftLegActive = false;
-		} else if (active && leftFootDif < NEARLY_ZERO) {
-			leftLegActive = true;
+			bufferHead.setLeftFootPositionCorrected(leftFootPosition);
+			bufferHead.setRightFootPositionCorrected(rightFootPosition);
 		}
 
-		if (!active && rightFootDif < NEARLY_ZERO) {
-			rightLegActive = false;
-		} else if (active && rightFootDif < NEARLY_ZERO) {
-			rightLegActive = true;
-		}
-
-		// restore the y positions of inactive legs
-		if (!leftLegActive) {
-			leftFootPosition.y = bufferHead.getLeftFootPosition(null).y;
-			leftKneePosition.y = bufferHead.getLeftKneePosition(null).y;
-		}
-
-		if (!rightLegActive) {
-			rightFootPosition.y = bufferHead.getRightFootPosition(null).y;
-			rightKneePosition.y = bufferHead.getRightKneePosition(null).y;
-		}
-
-		// calculate the correction for the knees
-		if (kneesActive && initialized)
-			solveLowerBody();
-
-		// populate the corrected data into the current frame
-		this.bufferHead.setLeftFootPositionCorrected(leftFootPosition);
-		this.bufferHead.setRightFootPositionCorrected(rightFootPosition);
-		this.bufferHead.setLeftKneePositionCorrected(leftKneePosition);
-		this.bufferHead.setRightKneePositionCorrected(rightKneePosition);
-		this.bufferHead.setWaistPositionCorrected(waistPosition);
+		// the buffer is no longer invalid and can be used normally
+		bufferInvalid = false;
 	}
 
-	// returns true if the foot is clipped and false if it is not
-	public boolean isClipped(float leftOffset, float rightOffset) {
-		return (leftFootPosition.y < floorLevel + leftOffset
-			|| rightFootPosition.y < floorLevel + rightOffset);
-	}
 
 	// corrects the foot position to be above the floor level that is calculated
 	// on calibration
@@ -738,32 +783,6 @@ public class LegTweaks {
 				}
 			}
 		}
-	}
-
-	// returns true if it is likely the user is standing
-	public boolean isStanding() {
-		// if force active is on do not check for standing as the system should
-		// always be on
-		if (forceActive || localizerMode) {
-			currentDisengagementOffset = 0f;
-			return true;
-		}
-
-		// if the waist is below the vertical cutoff, user is not standing
-		float cutoff = floorLevel
-			+ waistToFloorDist
-			- (waistToFloorDist * STANDING_CUTOFF_VERTICAL);
-
-		if (waistPosition.y < cutoff) {
-			currentDisengagementOffset = (1 - waistPosition.y / cutoff)
-				* MAX_DISENGAGMENT_OFFSET;
-
-			return false;
-		}
-
-		currentDisengagementOffset = 0f;
-
-		return true;
 	}
 
 	// move the knees in to a position that is closer to the truth
