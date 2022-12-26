@@ -12,6 +12,7 @@ import dev.slimevr.vr.trackers.TrackerStatus;
 
 
 public class Localizer {
+	// constants
 	public static final int LEFT_LOCKED = 1;
 	public static final int RIGHT_LOCKED = 2;
 	public static final int BOTH_LOCKED = 3;
@@ -22,25 +23,29 @@ public class Localizer {
 	// hyperparameters
 	private static final float MAX_PERCENTAGE_OVER_THRESHOLD = 6.0f;
 	private static final float GROUND_SNAP_PERCENT = 0.1f;
+	private static final int FRAMES_BETWEEN__VEL_CHECK_SUM = 1000;
 
-	// classes
+	// convenience variables
 	private HumanSkeleton skeleton;
 	private LegTweaks legTweaks;
-
-	// conviniance variables
 	private float uncorrectedFloor = 0.0f;
+	private LegTweakBuffer bufCur;
+	private LegTweakBuffer bufPrev;
 
 	// state
 	private boolean enabled = false;
-	private LegTweakBuffer bufCur;
-	private LegTweakBuffer bufPrev;
 	private Vector3f targetPos = new Vector3f();
 	private Vector3f targetCOM = new Vector3f();
-	private Vector3f expectedCOMVelocity = new Vector3f();
+	private Vector3f predictedCOMVelocity = new Vector3f();
 	private int plantedFoot = BOTH_LOCKED;
-	private int worldState = FOLLOW_FOOT;
+	private int worldReference = FOLLOW_FOOT;
 	private boolean footInit = false;
-	private boolean comInit = false;
+
+	// efficient avg velocity calculation variables
+	private Vector3f summedCOMVelocity = new Vector3f();
+	private int numCOMVelocitySamples = 0;
+	private int framesSinceCheckSum = 0;
+
 
 	public Localizer(HumanSkeleton skeleton) {
 		this.skeleton = skeleton;
@@ -75,33 +80,41 @@ public class Localizer {
 		bufPrev = bufCur.getParent();
 
 		// get momvent metric to be used for this frame
-		worldState = getMovmentMetric();
+		worldReference = getWorldReference();
+
+		// init the final travel vector
+		Vector3f finalTravel = new Vector3f();
 
 		// get the movment of the skeleton by foot travel
 		Vector3f footTravel = getPlantedFootTravel();
+		// when using the foot as a reference, it is important to
+		// keep the foot firmly planted on the ground
+		footTravel.y += getCorrectiveMovment();
 
 		// get the movment of the skeleton by the previus COM velocity
-		Vector3f COMTravel = getCOMTravel();
+		Vector3f comTravel = getCOMTravel();
 
-		// if neither foot is on the floor level accelerate towards the ground
-		// until one foot is on the ground
-		float correction = getCorrectiveMovment();
-
-		// add the y shift to the foot travel
-		if (footTravel != null)
-			footTravel.y += correction;
-
-		// if the foot is not initialized, use the COM velocity as a guess of
-		// movement for this frame
-		if (!footInit || footTravel == null) {
-			footTravel = COMTravel;
-
-			// TODO remove this
+		// if the foot is not initialized, do not use it
+		if (!footInit) {
 			footTravel = new Vector3f(0, 0, 0);
 		}
 
+		// if the average velocity is not initialized, do not use it
+		if (numCOMVelocitySamples < LegTweakBuffer.BUFFER_LEN) {
+			comTravel = new Vector3f(0, 0, 0);
+		}
+
+		// update the final travel vector
+		if (worldReference == FOLLOW_FOOT) {
+			finalTravel = footTravel;
+		} else if (worldReference == FOLLOW_COM) {
+			finalTravel = comTravel;
+		} else {
+			new Vector3f(0, 0, 0);
+		}
+
 		// update the skeletons root position
-		updateSkeletonPos(footTravel);
+		updateSkeletonPos(finalTravel);
 
 		// debug printing (takes over terminal output)
 		printState();
@@ -155,8 +168,9 @@ public class Localizer {
 	}
 
 	// check if the foot that is planted is actually planted
-	private int getMovmentMetric() {
+	private int getWorldReference() {
 		// TODO
+		// note to self: using the COM should be a last resort
 		return FOLLOW_FOOT;
 	}
 
@@ -231,7 +245,19 @@ public class Localizer {
 
 	// update the COM target position
 	private void updateTargetCOM() {
-		// TODO
+		// set the target COM to the current COM
+		// and the predicted COM velocity to the current COM velocity
+
+		if (worldReference == FOLLOW_FOOT) {
+			predictedCOMVelocity.set(getAverageCOMVelocity());
+			bufCur.getCenterOfMass(targetCOM);
+			return;
+		}
+
+		// if the foot is not locked, use the data that was collected above to
+		// predict the COM location
+		predictedCOMVelocity.addLocal(LegTweakBuffer.GRAVITY.divide(bufCur.getTimeDelta()));
+		targetCOM.addLocal(predictedCOMVelocity);
 	}
 
 	// makes sure the skeleton stays on the ground and doesn't fall through it
@@ -258,6 +284,32 @@ public class Localizer {
 		// if the foot is above the ground, return GROUND_SNAP_PERCENT of the
 		// distance to the ground to correct
 		return distToGround * GROUND_SNAP_PERCENT;
+	}
+
+	// gets the average COM velocity over the last LegTweakBuffer.BUFFER_LEN
+	// frames
+	private Vector3f getAverageCOMVelocity() {
+		LegTweakBuffer buf = bufCur;
+		int i = 0;
+
+		while (buf != null) {
+			// if this buffers velocity is not yet in the sum add it
+			if (i == 0) {
+				summedCOMVelocity.addLocal(buf.getCenterOfMassVelociy(null));
+				numCOMVelocitySamples++;
+			}
+			// remove the oldest velocity from the sum
+			if (i == LegTweakBuffer.BUFFER_LEN) {
+				summedCOMVelocity.subtractLocal(buf.getCenterOfMassVelociy(null));
+				numCOMVelocitySamples--;
+			}
+
+			// update the state of the loop
+			buf = buf.getParent();
+			i++;
+		}
+		// return the average velocity
+		return summedCOMVelocity.divide(numCOMVelocitySamples);
 	}
 
 	// update the hmd position and rotation
@@ -290,6 +342,12 @@ public class Localizer {
 					+ "\t"
 					+ right
 					+ "\033[0m"
+					+ "\t"
+					+ worldReference
+					+ "\t"
+					+ predictedCOMVelocity
+					+ "\t"
+					+ bufCur.getCenterOfMassVelociy(null)
 			);
 	}
 }
