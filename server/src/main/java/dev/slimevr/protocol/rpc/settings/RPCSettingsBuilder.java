@@ -1,10 +1,7 @@
 package dev.slimevr.protocol.rpc.settings;
 
 import com.google.flatbuffers.FlatBufferBuilder;
-import dev.slimevr.config.FiltersConfig;
-import dev.slimevr.config.LegTweaksConfig;
-import dev.slimevr.config.OSCConfig;
-import dev.slimevr.config.TapDetectionConfig;
+import dev.slimevr.config.*;
 import dev.slimevr.filtering.TrackerFilters;
 import dev.slimevr.platform.SteamVRBridge;
 import dev.slimevr.vr.processor.skeleton.SkeletonConfig;
@@ -89,6 +86,19 @@ public class RPCSettingsBuilder {
 			);
 	}
 
+	public static int createDriftCompensationSettings(
+		FlatBufferBuilder fbb,
+		DriftCompensationConfig driftCompensationConfig
+	) {
+		return DriftCompensationSettings
+			.createDriftCompensationSettings(
+				fbb,
+				driftCompensationConfig.getEnabled(),
+				driftCompensationConfig.getAmount(),
+				driftCompensationConfig.getMaxResets()
+			);
+	}
+
 	public static int createTapDetectionSettings(
 		FlatBufferBuilder fbb,
 		TapDetectionConfig tapDetectionConfig
@@ -142,8 +152,8 @@ public class RPCSettingsBuilder {
 				config.getToggle(SkeletonConfigToggles.EXTENDED_KNEE_MODEL),
 				config.getToggle(SkeletonConfigToggles.FORCE_ARMS_FROM_HMD),
 				config.getToggle(SkeletonConfigToggles.FLOOR_CLIP),
-				config.getToggle(SkeletonConfigToggles.SKATING_CORRECTION),
-				config.getToggle(SkeletonConfigToggles.VIVE_EMULATION)
+				config.getToggle(SkeletonConfigToggles.VIVE_EMULATION),
+				config.getToggle(SkeletonConfigToggles.SKATING_CORRECTION)
 			);
 		int ratiosOffset = ModelRatios
 			.createModelRatios(

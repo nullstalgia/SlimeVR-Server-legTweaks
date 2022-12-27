@@ -216,7 +216,7 @@ export function TrackerSettingsPage() {
                 <FootIcon></FootIcon>
                 <Typography>
                   {t(
-                    'body_part-' +
+                    'body-part-' +
                       BodyPart[tracker?.tracker.info?.bodyPart || BodyPart.NONE]
                   )}
                 </Typography>
